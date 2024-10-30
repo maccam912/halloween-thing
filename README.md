@@ -2,6 +2,8 @@
 
 A fun Halloween project that detects people in costumes through your webcam and provides witty, AI-generated comments through a spooky voice! Perfect for Halloween parties or trick-or-treat setups.
 
+Video Demo! https://www.youtube.com/watch?v=neJLd5W3-bE
+
 ## AI Attribution
 
 This project was primarily developed using AI tools:
