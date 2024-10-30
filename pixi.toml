@@ -1,0 +1,23 @@
+[project]
+authors = ["Matt Koski <maccam912@gmail.com>"]
+channels = ["nvidia", "pytorch", "conda-forge"]
+description = "Add a short description here"
+name = "halloween-thing"
+platforms = ["win-64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+python = "3.10.*"
+ultralytics = "*"
+openai = "*"
+python-dotenv = "*"
+pygame = "*"
+pytorch = ">=2.5.1,<3"
+torchvision = ">=0.20.1,<0.21"
+torchaudio = ">=2.5.1,<3"
+pytorch-cuda = "12.4.*"
+
+[pypi-dependencies]
+elevenlabs = ">=1.11.0, <2"
