@@ -11,6 +11,7 @@ from io import BytesIO
 import tempfile
 import threading
 from queue import Queue
+import numpy as np
 
 # Load environment variables
 load_dotenv()
@@ -23,6 +24,37 @@ eleven_labs = ElevenLabs(api_key=os.getenv('ELEVENLABS_API_KEY'))
 
 # TTS provider flag
 USE_OPENAI_TTS = os.getenv('USE_OPENAI_TTS', 'false').lower() == 'true'
+
+# Initialize face detection
+face_cascade = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
+if face_cascade.empty():
+    raise RuntimeError("Error loading face cascade classifier")
+
+def blur_face(image, face_rect, factor=8, iterations=2):
+    """Apply strong Gaussian blur to detected faces
+    
+    Parameters:
+    - factor: Smaller values create stronger blur (default: 8)
+    - iterations: Number of times to apply the blur (default: 2)
+    """
+    (x, y, w, h) = face_rect
+    face_roi = image[y:y+h, x:x+w]
+    
+    # Calculate blur kernel size based on face size
+    kernel_width = w // factor
+    kernel_height = h // factor
+    
+    # Ensure kernel size is odd and at least 3
+    kernel_width = max(3, kernel_width if kernel_width % 2 == 1 else kernel_width + 1)
+    kernel_height = max(3, kernel_height if kernel_height % 2 == 1 else kernel_height + 1)
+    
+    # Apply blur multiple times for stronger effect
+    blurred_face = face_roi.copy()
+    for _ in range(iterations):
+        blurred_face = cv2.GaussianBlur(blurred_face, (kernel_width, kernel_height), 0)
+    
+    image[y:y+h, x:x+w] = blurred_face
+    return image
 
 def encode_image_to_base64(image):
     """Convert CV2 image to base64 string"""
@@ -153,7 +185,7 @@ def main():
             if not ret:
                 break
 
-            # Run YOLO detection
+            # Run YOLO detection on original frame
             results = model(frame, verbose=False)
             
             current_time = time.time()
@@ -169,7 +201,7 @@ def main():
             if person_detected:
                 if person_detected_time == 0:  # First detection
                     person_detected_time = current_time
-                    frame_to_process = frame.copy()  # Store the frame
+                    frame_to_process = frame.copy()  # Store original frame for processing
             else:
                 person_detected_time = 0  # Reset if person leaves frame
             
@@ -183,7 +215,7 @@ def main():
                 processing = True
                 print("Processing detection after delay...")
                 
-                # Start processing in a separate thread
+                # Start processing in a separate thread with original frame
                 process_thread = threading.Thread(
                     target=process_detection,
                     args=(frame_to_process, task_queue),
@@ -196,9 +228,18 @@ def main():
                 frame_to_process = None
                 processing = False
 
-            # Display the frame with detection boxes
+            # Create display frame with blurred faces
+            display_frame = frame.copy()
+            
+            # Detect and blur faces only for display
+            gray = cv2.cvtColor(display_frame, cv2.COLOR_BGR2GRAY)
+            faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+            for (x, y, w, h) in faces:
+                display_frame = blur_face(display_frame, (x, y, w, h))
+
+            # Display the frame with detection boxes and blurred faces
             for result in results:
-                annotated_frame = result.plot()
+                annotated_frame = result.plot(img=display_frame)
                 cv2.imshow('Halloween Costume Detector', annotated_frame)
             
             # Break loop with 'q'
