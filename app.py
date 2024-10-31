@@ -9,6 +9,8 @@ import time
 import pygame
 from io import BytesIO
 import tempfile
+import threading
+from queue import Queue
 
 # Load environment variables
 load_dotenv()
@@ -37,7 +39,7 @@ def analyze_costume(image_base64):
                 "content": [
                     {
                         "type": "text",
-                        "text": "Look at this Halloween costume and come up with a witty, clever one-liner comment about it. Keep it fun and lighthearted. Make it sound natural, as if someone was casually passing by. Keep it brief - one sentence only. If there are any young children in the photo, keep it friendly and compliment them, but if there are only teenagers and adults they will think some gentle ribbing is funny."
+                        "text": "Look at this person's Halloween costume and create a witty one-liner comment. Focus only on their facial expression, what they're wearing, items they're holding, or pose they're striking. If it's a young child, be friendly and encouraging - directly compliment their specific costume choice and what makes it cool. For teens or adults, you can be more playfully sarcastic with some light roasting, using humor to keep it fun. Keep it to one natural-sounding sentence, as if someone is casually commenting while passing by."
                     },
                     {
                         "type": "image_url",
@@ -91,6 +93,33 @@ def play_audio(audio_data):
     pygame.mixer.quit()
     os.unlink(temp_path)
 
+def process_detection(frame, task_queue):
+    """Process a detected person in a separate thread"""
+    try:
+        # Convert frame to base64
+        image_base64 = encode_image_to_base64(frame)
+        
+        # Get witty comment from OpenAI
+        comment = analyze_costume(image_base64)
+        if comment:
+            print(f"Generated comment: {comment}")
+            
+            # Generate and play audio
+            audio_data = generate_speech(comment)
+            task_queue.put(('play_audio', audio_data))
+    except Exception as e:
+        print(f"Error processing detection: {e}")
+
+def audio_player_thread(task_queue):
+    """Thread to handle audio playback"""
+    while True:
+        task = task_queue.get()
+        if task[0] == 'play_audio':
+            play_audio(task[1])
+        elif task[0] == 'stop':
+            break
+        task_queue.task_done()
+
 def main():
     # Initialize YOLO
     model = YOLO("yolov8n.pt")
@@ -108,6 +137,15 @@ def main():
     last_detection_time = 0
     cooldown_period = 15  # Seconds between detections
     processing = False  # Flag to track if we're currently processing a detection
+    person_detected_time = 0  # Time when a person was first detected
+    frame_to_process = None  # Frame to be processed after delay
+    
+    # Create a queue for audio tasks
+    task_queue = Queue()
+    
+    # Start audio player thread
+    audio_thread = threading.Thread(target=audio_player_thread, args=(task_queue,), daemon=True)
+    audio_thread.start()
     
     try:
         while True:
@@ -119,33 +157,44 @@ def main():
             results = model(frame, verbose=False)
             
             current_time = time.time()
-            # Only process new detections if we're not currently processing and cooldown period has passed
-            if not processing and current_time - last_detection_time >= cooldown_period:
-                for result in results:
-                    # Check if any detected object is a person (class 0)
-                    if any(int(box.cls) == 0 for box in result.boxes):
-                        processing = True  # Set processing flag
-                        print("Person detected! Analyzing costume...")
-                        
-                        try:
-                            # Convert frame to base64
-                            image_base64 = encode_image_to_base64(frame)
-                            
-                            # Get witty comment from OpenAI
-                            comment = analyze_costume(image_base64)
-                            if comment:  # Check if comment is not None
-                                print(f"Generated comment: {comment}")
-                                
-                                # Generate and play audio
-                                audio_data = generate_speech(comment)
-                                play_audio(audio_data)
-                            
-                            last_detection_time = current_time
-                        except Exception as e:
-                            print(f"Error processing detection: {e}")
-                        finally:
-                            processing = False  # Reset processing flag
-                        break
+            person_detected = False
+            
+            for result in results:
+                # Check if any detected object is a person (class 0)
+                if any(int(box.cls) == 0 for box in result.boxes):
+                    person_detected = True
+                    break
+            
+            # Handle person detection timing
+            if person_detected:
+                if person_detected_time == 0:  # First detection
+                    person_detected_time = current_time
+                    frame_to_process = frame.copy()  # Store the frame
+            else:
+                person_detected_time = 0  # Reset if person leaves frame
+            
+            # Process after 2-second delay and cooldown period
+            if (person_detected_time > 0 and 
+                current_time - person_detected_time >= 2 and  # 2-second delay
+                current_time - last_detection_time >= cooldown_period and 
+                not processing and 
+                frame_to_process is not None):
+                
+                processing = True
+                print("Processing detection after delay...")
+                
+                # Start processing in a separate thread
+                process_thread = threading.Thread(
+                    target=process_detection,
+                    args=(frame_to_process, task_queue),
+                    daemon=True
+                )
+                process_thread.start()
+                
+                last_detection_time = current_time
+                person_detected_time = 0
+                frame_to_process = None
+                processing = False
 
             # Display the frame with detection boxes
             for result in results:
@@ -160,6 +209,10 @@ def main():
         print("\nStopping the application...")
     
     finally:
+        # Stop audio player thread
+        task_queue.put(('stop', None))
+        audio_thread.join(timeout=1)
+        
         cap.release()
         cv2.destroyAllWindows()
 
