@@ -19,6 +19,9 @@ client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 # Initialize ElevenLabs
 eleven_labs = ElevenLabs(api_key=os.getenv('ELEVENLABS_API_KEY'))
 
+# TTS provider flag
+USE_OPENAI_TTS = os.getenv('USE_OPENAI_TTS', 'false').lower() == 'true'
+
 def encode_image_to_base64(image):
     """Convert CV2 image to base64 string"""
     _, buffer = cv2.imencode('.jpg', image)
@@ -48,6 +51,25 @@ def analyze_costume(image_base64):
         max_tokens=100
     )
     return response.choices[0].message.content
+
+def generate_speech(text):
+    """Generate speech using either OpenAI or ElevenLabs"""
+    if USE_OPENAI_TTS:
+        response = client.audio.speech.create(
+            model="tts-1",
+            voice="alloy",
+            input=text
+        )
+        return response.content
+    else:
+        # Generate audio using ElevenLabs
+        audio = eleven_labs.text_to_speech.convert(
+            text=text,
+            voice_id="vGQNBgLaiM3EdZtxIiuY",  # Witch voice
+            model_id="eleven_turbo_v2"
+        )
+        # Convert the generator to bytes
+        return b''.join(chunk for chunk in audio if chunk is not None)
 
 def play_audio(audio_data):
     """Play audio using pygame"""
@@ -80,6 +102,7 @@ def main():
         print("Error: Could not open webcam")
         return
 
+    print(f"Using {'OpenAI' if USE_OPENAI_TTS else 'ElevenLabs'} for text-to-speech...")
     print("Waiting for people to be detected...")
     
     last_detection_time = 0
@@ -113,16 +136,8 @@ def main():
                             if comment:  # Check if comment is not None
                                 print(f"Generated comment: {comment}")
                                 
-                                # Generate and play audio using ElevenLabs
-                                audio = eleven_labs.text_to_speech.convert(
-                                    text=comment,
-                                    # voice_id="pNInz6obpgDQGcFmaJgB",  # Adam voice
-                                    voice_id="vGQNBgLaiM3EdZtxIiuY",  # Witch voice
-                                    model_id="eleven_turbo_v2"
-                                )
-                                
-                                # Convert the generator to bytes
-                                audio_data = b''.join(chunk for chunk in audio if chunk is not None)
+                                # Generate and play audio
+                                audio_data = generate_speech(comment)
                                 play_audio(audio_data)
                             
                             last_detection_time = current_time
